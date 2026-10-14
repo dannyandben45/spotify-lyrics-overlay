@@ -8,7 +8,9 @@ const lrclibHeaders = {
   'User-Agent': APP_USER_AGENT,
 }
 
-const FETCH_TIMEOUT_MS = 8000
+const FETCH_TIMEOUT_MS = 4500
+/** Duration delta (ms) good enough to stop waiting on slower providers */
+const GOOD_ENOUGH_SCORE_MS = 3500
 
 const fetchWithTimeout = async (
   input: string | URL,
@@ -48,8 +50,10 @@ const emptyResult = (): LyricsFetchResult => ({
 })
 
 /**
- * Spotify masters often differ in length from CN karaoke sources (no Spotify lyrics).
- * Scale LRC timestamps when we know (or can estimate) the source duration.
+ * Spotify masters often differ in length from CN karaoke sources.
+ * Only scale timestamps for large mismatches — small gaps (outro / silence)
+ * must NOT be stretched or mid-song lines go early/late (e.g. 用背脊唱情歌
+ * Spotify ~217s vs NetEase/LRCLIB ~210–215s).
  */
 const alignLyricsToTrackDuration = (
   lines: LyricLine[],
@@ -58,26 +62,33 @@ const alignLyricsToTrackDuration = (
 ): LyricLine[] => {
   if (lines.length === 0 || trackDurationMs < 5000) return lines
 
+  const last = lines[lines.length - 1]?.timeMs ?? 0
   let sourceMs =
     sourceDurationMs && sourceDurationMs > 5000 ? sourceDurationMs : null
 
   if (!sourceMs) {
-    const last = lines[lines.length - 1]?.timeMs ?? 0
     if (last < 5000) return lines
     const coverage = last / trackDurationMs
-    // Same-length master (lyric ends near song end) — keep as-is
-    if (coverage >= 0.88 && coverage <= 1.05) return lines
-    // Lyrics end early: estimate source length (typical short outro)
-    if (coverage >= 0.72 && coverage < 0.88) {
+    // Lyric body already covers the track — keep original timing
+    if (coverage >= 0.85 && coverage <= 1.08) return lines
+    // Only estimate when the LRC is clearly for a much shorter/longer cut
+    if (coverage >= 0.55 && coverage < 0.78) {
       sourceMs = Math.round(last / 0.9)
     } else {
       return lines
     }
   }
 
+  const deltaMs = Math.abs(trackDurationMs - sourceMs)
+  // Outro / padding differences under ~10s: keep karaoke timing as-is
+  if (deltaMs < 10_000) return lines
+
   const ratio = trackDurationMs / sourceMs
-  if (ratio < 0.9 || ratio > 1.15) return lines
-  if (Math.abs(1 - ratio) < 0.012) return lines
+  if (ratio < 0.88 || ratio > 1.14) return lines
+  if (Math.abs(1 - ratio) < 0.02) return lines
+
+  // If last line already sits near the Spotify end, stretching would hurt
+  if (last > 0 && last / trackDurationMs >= 0.9) return lines
 
   return lines.map((line) => ({
     ...line,
@@ -240,8 +251,10 @@ const scoreLrcLibCandidate = (
   const hasSynced = Boolean(track.syncedLyrics)
   const base = hasSynced ? 0 : 10_000
   if (typeof track.duration === 'number' && track.duration > 0) {
-    // Prefer real synced LRC; among those, closest duration wins
-    return base + Math.abs(track.duration - durationSec)
+    const delta = Math.abs(track.duration - durationSec)
+    // Hard-reject far-off masters (often wrong mix / karaoke)
+    if (delta > 8) return base + 50_000 + delta
+    return base + delta
   }
   // Unknown duration: mild penalty so exact duration matches rank higher
   return base + 3
@@ -260,41 +273,7 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
     if (!candidates.has(key)) candidates.set(key, track)
   }
 
-  // Exact + nearby durations: Spotify length often ≠ CN karaoke length
-  const durationTries = uniqueStrings(
-    [
-      durationSec,
-      durationSec - 1,
-      durationSec + 1,
-      durationSec - 2,
-      durationSec + 2,
-      Math.round(durationSec * 0.95),
-      Math.round(durationSec * 0.94),
-      Math.round(durationSec * 0.91),
-      Math.round(durationSec * 0.9),
-    ]
-      .filter((value) => value > 30)
-      .map(String),
-  ).map(Number)
-
-  for (const duration of durationTries) {
-    const getUrl = new URL('https://lrclib.net/api/get')
-    getUrl.searchParams.set('track_name', query.title)
-    getUrl.searchParams.set('artist_name', query.artist)
-    if (album) getUrl.searchParams.set('album_name', album)
-    getUrl.searchParams.set('duration', String(duration))
-
-    try {
-      const response = await fetchWithTimeout(getUrl.toString(), {
-        headers: lrclibHeaders,
-      })
-      if (!response.ok) continue
-      remember((await response.json()) as LrcLibTrack)
-    } catch {
-      // try next
-    }
-  }
-
+  // Search first (1 request) — covers most tracks without duration guessing
   const search = new URL('https://lrclib.net/api/search')
   search.searchParams.set('track_name', query.title)
   search.searchParams.set('artist_name', query.artist)
@@ -311,7 +290,35 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
       }
     }
   } catch {
-    // keep get-only candidates
+    // fall through to get
+  }
+
+  // Only if search missed: exact duration get (±1) in parallel
+  if (candidates.size === 0 && durationSec > 30) {
+    const durationTries = uniqueStrings([
+      String(durationSec),
+      String(durationSec - 1),
+      String(durationSec + 1),
+    ]).map(Number)
+
+    await Promise.all(
+      durationTries.map(async (duration) => {
+        const getUrl = new URL('https://lrclib.net/api/get')
+        getUrl.searchParams.set('track_name', query.title)
+        getUrl.searchParams.set('artist_name', query.artist)
+        if (album) getUrl.searchParams.set('album_name', album)
+        getUrl.searchParams.set('duration', String(duration))
+        try {
+          const response = await fetchWithTimeout(getUrl.toString(), {
+            headers: lrclibHeaders,
+          })
+          if (!response.ok) return
+          remember((await response.json()) as LrcLibTrack)
+        } catch {
+          // ignore
+        }
+      }),
+    )
   }
 
   const ranked = [...candidates.values()].sort(
@@ -398,19 +405,15 @@ const searchNeteaseSongs = async (keyword: string): Promise<NeteaseSong[]> => {
 
 const fetchFromNetease = async (query: LyricsQuery): Promise<LyricsFetchResult> => {
   const simplifiedTitle = toSimplified(query.title)
-  const simplifiedArtist = toSimplified(query.artist)
   const primaryArtist = query.artist.split(',')[0]?.trim() || query.artist
   const simplifiedPrimaryArtist = toSimplified(primaryArtist)
   const trackDurationMs = Math.round((query.durationSec || 0) * 1000)
 
+  // Keep keyword fan-out tiny — each search is a full RTT
   const keywords = uniqueStrings([
-    `${simplifiedArtist} ${simplifiedTitle}`,
     `${simplifiedPrimaryArtist} ${simplifiedTitle}`,
-    `${simplifiedTitle} ${simplifiedPrimaryArtist}`,
-    `${query.artist} ${query.title}`,
     `${primaryArtist} ${query.title}`,
     simplifiedTitle,
-    query.title,
   ])
 
   const songMap = new Map<number, NeteaseSong>()
@@ -420,7 +423,7 @@ const fetchFromNetease = async (query: LyricsQuery): Promise<LyricsFetchResult> 
     for (const song of songs) {
       if (!songMap.has(song.id)) songMap.set(song.id, song)
     }
-    if (songMap.size >= 8) break
+    if (songMap.size >= 5) break
   }
 
   const songs = [...songMap.values()]
@@ -466,7 +469,7 @@ const fetchFromNetease = async (query: LyricsQuery): Promise<LyricsFetchResult> 
     return 0
   })
 
-  for (const song of ranked.slice(0, 5)) {
+  for (const song of ranked.slice(0, 3)) {
     const lyricUrl = new URL('https://music.163.com/api/song/lyric')
     lyricUrl.searchParams.set('id', String(song.id))
     lyricUrl.searchParams.set('lv', '1')
@@ -534,51 +537,41 @@ const looksLikeLrcPayload = (text: string) => {
  */
 const fetchFromLrcApi = async (query: LyricsQuery): Promise<LyricsFetchResult> => {
   const primaryArtist = query.artist.split(',')[0]?.trim() || query.artist
-  const titleVariants = uniqueStrings([query.title, toSimplified(query.title)])
-  const artistVariants = uniqueStrings([
-    primaryArtist,
-    primaryArtist.replace(/\.$/, ''),
-    toSimplified(primaryArtist),
-    query.artist,
-    toSimplified(query.artist),
-  ])
-
-  // Prefer no-album first. Only use album when it adds info (not same as title).
-  const album = usefulAlbum(query.title, query.album) ?? ''
-  const albumVariants = album ? ['', album] : ['']
+  // Cap variants — nested fan-out was the slow path for many 粵語 tracks
+  const attempts = uniqueStrings([
+    `${query.title}\0${primaryArtist}`,
+    `${toSimplified(query.title)}\0${toSimplified(primaryArtist)}`,
+  ]).map((pair) => {
+    const [title, artist] = pair.split('\0')
+    return { title, artist }
+  })
 
   const headers = {
     'User-Agent': APP_USER_AGENT,
   }
 
-  for (const albumName of albumVariants) {
-    for (const title of titleVariants) {
-      for (const artist of artistVariants) {
-        const url = new URL('https://api.lrc.cx/lyrics')
-        url.searchParams.set('title', title)
-        url.searchParams.set('artist', artist)
-        if (albumName) url.searchParams.set('album', albumName)
+  for (const { title, artist } of attempts) {
+    const url = new URL('https://api.lrc.cx/lyrics')
+    url.searchParams.set('title', title)
+    url.searchParams.set('artist', artist)
 
-        try {
-          const response = await fetchWithTimeout(url.toString(), { headers })
-          if (!response.ok) continue
+    try {
+      const response = await fetchWithTimeout(url.toString(), { headers })
+      if (!response.ok) continue
 
-          const text = (await response.text()).trim()
-          if (!looksLikeLrcPayload(text)) continue
+      const text = (await response.text()).trim()
+      if (!looksLikeLrcPayload(text)) continue
 
-          const lines = parseLrc(text)
-          if (lines.length > 0) {
-            const last = lines[lines.length - 1]?.timeMs ?? 0
-            return {
-              lines,
-              // No official duration — estimate from last line for aligner
-              sourceDurationMs: last > 0 ? Math.round(last / 0.9) : null,
-            }
-          }
-        } catch {
-          // try next variant
+      const lines = parseLrc(text)
+      if (lines.length > 0) {
+        const last = lines[lines.length - 1]?.timeMs ?? 0
+        return {
+          lines,
+          sourceDurationMs: last > 0 ? Math.round(last / 0.9) : null,
         }
       }
+    } catch {
+      // try next
     }
   }
 
@@ -593,26 +586,56 @@ const fetchFromLrcLibWithVariants = async (
 ): Promise<LyricsFetchResult> => {
   const album = usefulAlbum(query.title, query.album)
   const variants = uniqueStrings([
-    query.title,
-    toSimplified(query.title),
-  ]).flatMap((title) =>
-    uniqueStrings([query.artist, toSimplified(query.artist)]).map((artist) => ({
+    `${query.title}\0${query.artist}`,
+    `${toSimplified(query.title)}\0${toSimplified(query.artist)}`,
+  ]).map((pair) => {
+    const [title, artist] = pair.split('\0')
+    return {
       ...query,
       title,
       artist,
       album: album ? toSimplified(album) : undefined,
-    })),
-  )
+    }
+  })
 
-  const seen = new Set<string>()
   for (const variant of variants) {
-    const key = `${variant.title}|${variant.artist}`
-    if (seen.has(key)) continue
-    seen.add(key)
     const result = await fetchFromLrcLib(variant)
     if (result.lines.length > 0) return result
   }
   return emptyResult()
+}
+
+/** Lower is better — duration match beats first-hit LRCLIB guesses. */
+const scoreSyncedCandidate = (
+  result: LyricsFetchResult,
+  trackDurationMs: number,
+): number => {
+  if (result.lines.length === 0) return Number.POSITIVE_INFINITY
+
+  const lastMs = result.lines[result.lines.length - 1]?.timeMs ?? 0
+  let score = 0
+
+  if (result.sourceDurationMs && result.sourceDurationMs > 0 && trackDurationMs > 0) {
+    score += Math.abs(result.sourceDurationMs - trackDurationMs)
+  } else {
+    // Unknown master length — weak estimate from last lyric
+    score += 4000
+    if (trackDurationMs > 0 && lastMs > 0) {
+      score += Math.abs(lastMs - trackDurationMs * 0.92)
+    }
+  }
+
+  // Timed past the Spotify song → almost certainly wrong master
+  if (trackDurationMs > 0 && lastMs > trackDurationMs + 12_000) {
+    score += 20_000
+  }
+
+  // Empty / intro-only timestamps
+  if (result.lines.every((line) => !line.text.trim())) {
+    score += 50_000
+  }
+
+  return score
 }
 
 export const fetchLyricsWithFallbacks = async (
@@ -621,42 +644,95 @@ export const fetchLyricsWithFallbacks = async (
   const cjk = isLikelyCjkTrack(query)
   const trackDurationMs = Math.round((query.durationSec || 0) * 1000)
 
-  // Prefer sources that publish track duration (better sync vs Spotify masters).
-  // Spotify-without-lyrics tracks often use a different-length CN karaoke LRC.
-  const providers: Array<{
+  // Timed providers race in parallel; return as soon as one is a close duration match.
+  // CJK: NetEase / LrcAPI usually beat crowd LRCLIB for 粵語港台 sync.
+  const timedProviders: Array<{
     name: string
     run: () => Promise<LyricsFetchResult>
   }> = cjk
     ? [
-        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(query) },
         { name: 'netease', run: () => fetchFromNetease(query) },
         { name: 'lrc.cx', run: () => fetchFromLrcApi(query) },
-        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(query) },
+        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(query) },
       ]
     : [
         { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(query) },
         { name: 'lrc.cx', run: () => fetchFromLrcApi(query) },
         { name: 'netease', run: () => fetchFromNetease(query) },
-        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(query) },
       ]
 
-  for (const provider of providers) {
+  type Ranked = {
+    name: string
+    result: LyricsFetchResult
+    score: number
+  }
+
+  const ranked: Ranked[] = []
+  let remaining = timedProviders.length
+  let earlyResolve: ((value: Ranked | null) => void) | null = null
+  const earlyGate = new Promise<Ranked | null>((resolve) => {
+    earlyResolve = resolve
+  })
+
+  const toPayload = (entry: Ranked) => {
+    const aligned = alignLyricsToTrackDuration(
+      entry.result.lines,
+      entry.result.sourceDurationMs,
+      trackDurationMs,
+    )
+    return {
+      lines: toTraditionalLines(aligned),
+      source: entry.name,
+    }
+  }
+
+  const tasks = timedProviders.map(async (provider) => {
     try {
       const result = await provider.run()
-      if (result.lines.length > 0) {
-        const aligned = alignLyricsToTrackDuration(
-          result.lines,
-          result.sourceDurationMs,
-          trackDurationMs,
-        )
-        return {
-          lines: toTraditionalLines(aligned),
-          source: provider.name,
-        }
+      if (result.lines.length === 0) return
+      const entry: Ranked = {
+        name: provider.name,
+        result,
+        score: scoreSyncedCandidate(result, trackDurationMs),
+      }
+      ranked.push(entry)
+      // Close duration match → show lyrics immediately, don't wait on LRCLIB etc.
+      if (entry.score <= GOOD_ENOUGH_SCORE_MS) {
+        earlyResolve?.(entry)
+        earlyResolve = null
       }
     } catch {
-      // try next free source
+      // provider failed
+    } finally {
+      remaining -= 1
+      if (remaining <= 0) {
+        earlyResolve?.(null)
+        earlyResolve = null
+      }
     }
+  })
+
+  const earlyWinner = await earlyGate
+  if (earlyWinner) {
+    void Promise.allSettled(tasks)
+    return toPayload(earlyWinner)
+  }
+
+  await Promise.allSettled(tasks)
+  ranked.sort((a, b) => a.score - b.score)
+  const best = ranked.find((entry) => entry.score < 15_000) ?? ranked[0]
+  if (best) return toPayload(best)
+
+  try {
+    const plain = await fetchFromLyricsOvh(query)
+    if (plain.lines.length > 0) {
+      return {
+        lines: toTraditionalLines(plain.lines),
+        source: 'lyrics.ovh',
+      }
+    }
+  } catch {
+    // no plain lyrics
   }
 
   return { lines: [], source: null }

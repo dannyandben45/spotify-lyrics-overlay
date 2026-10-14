@@ -204,6 +204,18 @@ const getNowPlayingOnce = async (): Promise<NowPlaying> => {
   }
 }
 
+/** Advance a cached SMTC sample to "now" so lyrics are not late by poll age */
+const withAgedPosition = (sample: NowPlaying, sampledAt: number): NowPlaying => {
+  if (!sample.ok || !sample.playing || !sample.isPlaying) return sample
+  const ageMs = Math.max(0, Date.now() - sampledAt)
+  if (ageMs <= 0) return sample
+  let positionMs = sample.positionMs + ageMs
+  if (sample.durationMs > 0) {
+    positionMs = Math.min(positionMs, sample.durationMs)
+  }
+  return { ...sample, positionMs }
+}
+
 export const getNowPlaying = async (): Promise<NowPlaying> => {
   if (process.platform !== 'win32') {
     return {
@@ -220,7 +232,7 @@ export const getNowPlaying = async (): Promise<NowPlaying> => {
 
   // Fresh enough — avoid spawning another PowerShell
   if (latestAt > 0 && Date.now() - latestAt < 2500) {
-    return latest
+    return withAgedPosition(latest, latestAt)
   }
 
   // Worker stalled — one-shot then restart

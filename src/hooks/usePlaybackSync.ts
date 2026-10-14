@@ -6,7 +6,7 @@ const SEEK_THRESHOLD_MS = 2200
 const STALE_BEHIND_MS = 900
 const EMPTY_RETRY_MS = 20_000
 // Bump when lyric matching logic changes so stale wrong lyrics are refetched
-const LYRICS_CACHE_VERSION = 7
+const LYRICS_CACHE_VERSION = 10
 
 const idlePayload = (partial?: Partial<PlaybackPayload>): PlaybackPayload => ({
   connected: true,
