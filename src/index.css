@@ -1,0 +1,239 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap');
+@import 'tailwindcss';
+
+:root {
+  --bg: #0f1410;
+  --bg-elevated: #1a221c;
+  --ink: #e8f0e9;
+  --muted: #8fa394;
+  --accent: #1ed760;
+  --accent-dim: #149c46;
+  --line: rgba(232, 240, 233, 0.12);
+  --danger: #ff6b6b;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--ink);
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  background: transparent !important;
+}
+
+html.overlay-mode,
+html.overlay-mode body,
+html.overlay-mode #root {
+  background: transparent !important;
+  width: 720px !important;
+  height: 240px !important;
+  min-width: 720px !important;
+  min-height: 240px !important;
+  max-width: 720px !important;
+  max-height: 240px !important;
+  overflow: hidden !important;
+}
+
+body {
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.control-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(30, 215, 96, 0.18), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(120, 160, 130, 0.12), transparent 50%),
+    linear-gradient(160deg, #101612 0%, #0b100d 45%, #121a14 100%);
+  color: var(--ink);
+}
+
+.overlay-shell {
+  margin: 0;
+  padding: 0;
+  width: 720px;
+  height: 240px;
+  background: transparent !important;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+.overlay-drag-handle {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.overlay-drag-handle p {
+  /* Keep glyph shade inside the padded area (not clipped by left edge) */
+  padding-left: 2px;
+  background: transparent !important;
+}
+
+.overlay-settings {
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.overlay-card {
+  width: 720px;
+  height: 240px;
+  background: transparent !important;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.overlay-lyrics {
+  width: 100%;
+}
+
+.lyric-wheel {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  padding: 0 0.5rem;
+  box-sizing: border-box;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
+}
+
+.lyric-wheel-track {
+  will-change: transform;
+  transition-property: transform;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lyric-wheel-track.is-frozen {
+  transition-duration: 0ms !important;
+}
+
+.lyric-wheel-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.5rem;
+  box-sizing: border-box;
+  transition-property: none;
+}
+
+.lyric-wheel-text {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  /* Same typeface/size always — size change is only via scale (no font-size snap) */
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 1.45rem;
+  font-style: italic;
+  line-height: 1.15;
+  text-align: center;
+  white-space: pre-line;
+  overflow: hidden;
+  max-height: 2.3em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding-inline: 0.1em;
+  box-sizing: border-box;
+  transform-origin: center center;
+  transition-property: transform, opacity, color;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  transition-duration: inherit;
+  letter-spacing: 0.06em;
+  text-shadow: var(--overlay-shade);
+}
+
+.lyric-wheel-track.is-frozen .lyric-wheel-text {
+  transition-duration: 0ms !important;
+}
+
+/* Side lines: visually small, same layout font */
+.lyric-wheel-row--prev .lyric-wheel-text,
+.lyric-wheel-row--next .lyric-wheel-text,
+.lyric-wheel-row--edge .lyric-wheel-text {
+  color: rgba(255, 255, 255, 0.4);
+  opacity: 1;
+  transform: scale(0.5);
+}
+
+.lyric-wheel-row--current .lyric-wheel-text {
+  color: #fff;
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Roll: current shrinks while rising; next grows while rising — same duration as translate */
+.lyric-wheel-row--current.is-morph-out .lyric-wheel-text {
+  color: rgba(255, 255, 255, 0.4);
+  transform: scale(0.5);
+}
+
+.lyric-wheel-row--next.is-morph-in .lyric-wheel-text {
+  color: #fff;
+  transform: scale(1);
+}
+
+/*
+  Soft halo only — low opacity + blur so glyphs stay separate on white.
+  Avoid hard/dark offsets (those glue CJK characters together).
+*/
+:root {
+  --overlay-shade:
+    0 0 4px rgba(0, 0, 0, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+.overlay-text-shadow {
+  text-shadow: var(--overlay-shade);
+}
+
+.overlay-settings-icon {
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.35))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28));
+}
+
+.font-display {
+  font-family: 'Instrument Serif', Georgia, serif;
+}
+
+.lyrics-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid rgba(255, 255, 255, 0.25);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  animation: lyricsSpin 0.7s linear infinite;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
+}
+
+@keyframes lyricsSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
