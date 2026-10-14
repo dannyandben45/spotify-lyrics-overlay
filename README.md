@@ -7,21 +7,13 @@ Always-on-top floating lyrics for Spotify on Windows.
 The app reads whatever Spotify Desktop is playing through Windows media session, then loads lyrics from free sources.
 
 **粵語 / 港台 / 中文歌**
-1. Optional [KKBOX Open API](https://developer.kkbox.com/) — match the correct track in HK/TW (metadata only; KKBOX has no public lyrics API)
-2. [LrcAPI](https://github.com/HisAtri/LrcApi) (`api.lrc.cx`) — synced LRC (strong for 粵語/港台)
-3. NetEase Cloud Music lyric API (synced)
-4. [LRCLIB](https://lrclib.net) (synced, tries traditional + simplified)
-5. [lyrics.ovh](https://lyrics.ovh) (plain fallback)
+1. [LRCLIB](https://lrclib.net) (synced, tries traditional + simplified)
+2. NetEase Cloud Music lyric API (synced)
+3. [LrcAPI](https://github.com/HisAtri/LrcApi) (`api.lrc.cx`) — synced LRC (strong for 粵語/港台)
+4. [lyrics.ovh](https://lyrics.ovh) (plain fallback)
 
 **其他歌**
 1. LRCLIB → LrcAPI → NetEase → lyrics.ovh
-
-To enable KKBOX matching, set in `.env`:
-
-```
-KKBOX_CLIENT_ID=...
-KKBOX_CLIENT_SECRET=...
-```
 
 ## For anyone using it
 

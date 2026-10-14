@@ -1,35 +1,4 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import * as OpenCC from 'opencc-js'
-
-let envLoaded = false
-
-const loadLocalEnv = () => {
-  if (envLoaded) return
-  envLoaded = true
-  try {
-    const envPath = path.join(process.cwd(), '.env')
-    if (!fs.existsSync(envPath)) return
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const matched = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
-      if (!matched) continue
-      const key = matched[1]
-      if (process.env[key]) continue
-      let value = matched[2].trim()
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1)
-      }
-      process.env[key] = value
-    }
-  } catch {
-    // ignore
-  }
-}
 
 export type LyricLine = {
   timeMs: number
@@ -529,108 +498,6 @@ const fetchFromLrcApi = async (query: LyricsQuery): Promise<LyricsFetchResult> =
 const isLikelyCjkTrack = (query: LyricsQuery) =>
   /[\u4e00-\u9fff]/.test(`${query.title} ${query.artist} ${query.album ?? ''}`)
 
-type KkboxToken = {
-  accessToken: string
-  expiresAt: number
-}
-
-let kkboxTokenCache: KkboxToken | null = null
-
-const getKkboxAccessToken = async () => {
-  loadLocalEnv()
-  const clientId = process.env.KKBOX_CLIENT_ID?.trim()
-  const clientSecret = process.env.KKBOX_CLIENT_SECRET?.trim()
-  if (!clientId || !clientSecret) return null
-
-  if (kkboxTokenCache && Date.now() < kkboxTokenCache.expiresAt - 60_000) {
-    return kkboxTokenCache.accessToken
-  }
-
-  const body = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-  })
-
-  const response = await fetch('https://account.kkbox.com/oauth2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  })
-  if (!response.ok) return null
-
-  const json = (await response.json()) as {
-    access_token?: string
-    expires_in?: number
-  }
-  if (!json.access_token) return null
-
-  kkboxTokenCache = {
-    accessToken: json.access_token,
-    expiresAt: Date.now() + (json.expires_in ?? 3600) * 1000,
-  }
-  return kkboxTokenCache.accessToken
-}
-
-/**
- * KKBOX Open API has no lyrics endpoint.
- * For 粵語/港台 songs we use it to resolve better title/artist (HK territory),
- * then fetch lyrics from free lyric providers.
- */
-const enrichQueryWithKkbox = async (query: LyricsQuery): Promise<LyricsQuery> => {
-  if (!isLikelyCjkTrack(query)) return query
-
-  try {
-    const token = await getKkboxAccessToken()
-    if (!token) return query
-
-    const territories = ['HK', 'TW']
-    const q = `${query.artist} ${query.title}`.trim()
-
-    for (const territory of territories) {
-      const searchUrl = new URL('https://api.kkbox.com/v1.1/search')
-      searchUrl.searchParams.set('q', q)
-      searchUrl.searchParams.set('type', 'track')
-      searchUrl.searchParams.set('territory', territory)
-      searchUrl.searchParams.set('limit', '5')
-
-      const response = await fetch(searchUrl.toString(), {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!response.ok) continue
-
-      const json = (await response.json()) as {
-        tracks?: {
-          data?: Array<{
-            name?: string
-            album?: { name?: string; artist?: { name?: string } }
-            artist?: { name?: string }
-          }>
-        }
-      }
-
-      const track = json.tracks?.data?.[0]
-      if (!track?.name) continue
-
-      const artist =
-        track.album?.artist?.name ||
-        track.artist?.name ||
-        query.artist
-
-      return {
-        ...query,
-        title: track.name,
-        artist,
-        album: track.album?.name || query.album,
-      }
-    }
-  } catch {
-    // keep original query
-  }
-
-  return query
-}
-
 const fetchFromLrcLibWithVariants = async (
   query: LyricsQuery,
 ): Promise<LyricsFetchResult> => {
@@ -661,9 +528,8 @@ const fetchFromLrcLibWithVariants = async (
 export const fetchLyricsWithFallbacks = async (
   query: LyricsQuery,
 ): Promise<{ lines: LyricLine[]; source: string | null }> => {
-  const enriched = await enrichQueryWithKkbox(query)
-  const cjk = isLikelyCjkTrack(enriched)
-  const trackDurationMs = Math.round((enriched.durationSec || 0) * 1000)
+  const cjk = isLikelyCjkTrack(query)
+  const trackDurationMs = Math.round((query.durationSec || 0) * 1000)
 
   // Prefer sources that publish track duration (better sync vs Spotify masters).
   // Spotify-without-lyrics tracks often use a different-length CN karaoke LRC.
@@ -672,16 +538,16 @@ export const fetchLyricsWithFallbacks = async (
     run: () => Promise<LyricsFetchResult>
   }> = cjk
     ? [
-        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(enriched) },
-        { name: 'netease', run: () => fetchFromNetease(enriched) },
-        { name: 'lrc.cx', run: () => fetchFromLrcApi(enriched) },
-        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(enriched) },
+        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(query) },
+        { name: 'netease', run: () => fetchFromNetease(query) },
+        { name: 'lrc.cx', run: () => fetchFromLrcApi(query) },
+        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(query) },
       ]
     : [
-        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(enriched) },
-        { name: 'lrc.cx', run: () => fetchFromLrcApi(enriched) },
-        { name: 'netease', run: () => fetchFromNetease(enriched) },
-        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(enriched) },
+        { name: 'lrclib', run: () => fetchFromLrcLibWithVariants(query) },
+        { name: 'lrc.cx', run: () => fetchFromLrcApi(query) },
+        { name: 'netease', run: () => fetchFromNetease(query) },
+        { name: 'lyrics.ovh', run: () => fetchFromLyricsOvh(query) },
       ]
 
   for (const provider of providers) {
