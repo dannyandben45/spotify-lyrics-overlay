@@ -17,15 +17,55 @@ const emptyPlayback: PlaybackPayload = {
   status: 'loading',
 }
 
+const SCALE_MIN = 0.7
+const SCALE_MAX = 1.8
+/** Pixels of diagonal drag ≈ +1.0 scale */
+const DIAGONAL_PX_PER_SCALE = 420
+
+const clampScale = (value: number) =>
+  Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(value * 100) / 100))
+
 const isPointInRect = (x: number, y: number, rect: DOMRect) =>
   x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 
 export const LyricsOverlay = () => {
   const [playback, setPlayback] = useState<PlaybackPayload>(emptyPlayback)
+  // Always start at 100% — scale is session-only, not persisted
+  const [scale, setScale] = useState(() => {
+    document.documentElement.style.setProperty('--overlay-scale', '1')
+    return 1
+  })
   const dragHandleRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
+  const scaleCornerRef = useRef<HTMLButtonElement | null>(null)
   const draggingRef = useRef(false)
+  const scalingRef = useRef<{
+    startScreenX: number
+    startScreenY: number
+    startScale: number
+  } | null>(null)
   const clickThroughRef = useRef(true)
+  const scaleRef = useRef(scale)
+  const applyingExternalScaleRef = useRef(false)
+
+  useEffect(() => {
+    scaleRef.current = scale
+    document.documentElement.style.setProperty('--overlay-scale', String(scale))
+    if (applyingExternalScaleRef.current) {
+      applyingExternalScaleRef.current = false
+      return
+    }
+    void window.lyricsApi.setOverlayScale(scale).then((result) => {
+      if (
+        result.ok &&
+        typeof result.scale === 'number' &&
+        Math.abs(result.scale - scaleRef.current) > 0.01
+      ) {
+        applyingExternalScaleRef.current = true
+        setScale(clampScale(result.scale))
+      }
+    })
+  }, [scale])
 
   useEffect(() => {
     return window.lyricsApi.onPlaybackUpdate((payload) => {
@@ -34,7 +74,17 @@ export const LyricsOverlay = () => {
   }, [])
 
   useEffect(() => {
-    void window.lyricsApi.lockOverlayFixedSize()
+    return window.lyricsApi.onOverlayScale((nextScale) => {
+      const clamped = clampScale(nextScale)
+      if (Math.abs(clamped - scaleRef.current) < 0.01) return
+      applyingExternalScaleRef.current = true
+      setScale(clamped)
+    })
+  }, [])
+
+  useEffect(() => {
+    localStorage.removeItem('overlay-scale')
+    void window.lyricsApi.setOverlayScale(1)
   }, [])
 
   useEffect(() => {
@@ -50,6 +100,7 @@ export const LyricsOverlay = () => {
     const isOverInteractive = (clientX: number, clientY: number) => {
       const handle = dragHandleRef.current
       const toolbar = toolbarRef.current
+      const corner = scaleCornerRef.current
       if (handle && isPointInRect(clientX, clientY, handle.getBoundingClientRect())) {
         return true
       }
@@ -59,10 +110,29 @@ export const LyricsOverlay = () => {
       ) {
         return true
       }
+      if (
+        corner &&
+        isPointInRect(clientX, clientY, corner.getBoundingClientRect())
+      ) {
+        return true
+      }
       return false
     }
 
     const handleMouseMove = (event: MouseEvent) => {
+      if (scalingRef.current) {
+        setClickThrough(false)
+        // Diagonal only: average of right + down (ignore pure left/right or up/down stretch)
+        const dx = event.screenX - scalingRef.current.startScreenX
+        const dy = event.screenY - scalingRef.current.startScreenY
+        const diagonal = (dx + dy) / 2
+        const next = clampScale(
+          scalingRef.current.startScale + diagonal / DIAGONAL_PX_PER_SCALE,
+        )
+        setScale(next)
+        return
+      }
+
       if (draggingRef.current) {
         setClickThrough(false)
         window.lyricsApi.moveOverlayDrag({
@@ -72,20 +142,23 @@ export const LyricsOverlay = () => {
         return
       }
 
-      // Lyrics / empty chrome stay click-through; only title row + toolbar capture mouse
       setClickThrough(!isOverInteractive(event.clientX, event.clientY))
     }
 
     const handleMouseUp = () => {
+      if (scalingRef.current) {
+        scalingRef.current = null
+        setClickThrough(true)
+        return
+      }
       if (!draggingRef.current) return
       draggingRef.current = false
       window.lyricsApi.endOverlayDrag()
-      // Re-evaluate hit target after drag ends
       setClickThrough(true)
     }
 
     const handleMouseLeave = () => {
-      if (draggingRef.current) return
+      if (draggingRef.current || scalingRef.current) return
       setClickThrough(true)
     }
 
@@ -115,6 +188,19 @@ export const LyricsOverlay = () => {
     })
   }
 
+  const handleScaleStart = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    scalingRef.current = {
+      startScreenX: event.screenX,
+      startScreenY: event.screenY,
+      startScale: scaleRef.current,
+    }
+    clickThroughRef.current = false
+    void window.lyricsApi.setClickThrough(false)
+  }
+
   const handleQuitApp = () => {
     void window.lyricsApi.quitApp()
   }
@@ -131,6 +217,16 @@ export const LyricsOverlay = () => {
   return (
     <div className="overlay-shell">
       <div className="overlay-card relative">
+        <button
+          ref={scaleCornerRef}
+          type="button"
+          className="overlay-scale-corner"
+          onMouseDown={handleScaleStart}
+          aria-label={`Scale overlay diagonally, currently ${Math.round(scale * 100)} percent. Drag along the diagonal to resize.`}
+          title="Drag diagonally to scale"
+          tabIndex={0}
+        />
+
         <div
           ref={toolbarRef}
           className="absolute top-1 right-2 z-10 flex items-center gap-0.5"

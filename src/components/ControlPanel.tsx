@@ -5,6 +5,7 @@ import { usePlaybackSync } from '../hooks/usePlaybackSync'
 
 export const ControlPanel = () => {
   const [offsetMs, setOffsetMs] = useState(0)
+  const [overlayScale, setOverlayScale] = useState(1)
   const lastTrackIdRef = useRef<string | null>(null)
   const playback = usePlaybackSync({ enabled: true, offsetMs })
 
@@ -21,8 +22,18 @@ export const ControlPanel = () => {
     lastTrackIdRef.current = trackId
   }, [playback.trackId])
 
+  useEffect(() => {
+    return window.lyricsApi.onOverlayScale((scale) => {
+      setOverlayScale(scale)
+    })
+  }, [])
+
   const handleNudge = (delta: number) => {
     setOffsetMs((value) => Math.max(-15000, Math.min(15000, value + delta)))
+  }
+
+  const handleResetScale = () => {
+    void window.lyricsApi.setOverlayScale(1)
   }
 
   const activeIndex = findActiveLineIndex(playback.lines, playback.progressMs)
@@ -88,6 +99,24 @@ export const ControlPanel = () => {
             Reset
           </button>
         </div>
+      </section>
+
+      <section className="mb-5 rounded-2xl border border-[var(--line)] bg-[rgba(26,34,28,0.72)] p-4 backdrop-blur">
+        <h2 className="mb-2 text-sm font-semibold">Overlay size</h2>
+        <p className="mb-3 text-xs text-[var(--muted)]">
+          Drag the top-left triangle diagonally to scale. Current:{' '}
+          <span className="text-[var(--ink)]">
+            {Math.round(overlayScale * 100)}%
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={handleResetScale}
+          className="rounded-xl border border-[var(--line)] px-3 py-2 text-sm font-semibold transition hover:bg-white/5"
+          aria-label="Reset overlay scale to 100 percent"
+        >
+          Reset scale
+        </button>
       </section>
 
       <section className="rounded-2xl border border-[var(--line)] bg-[rgba(26,34,28,0.72)] p-4 backdrop-blur">

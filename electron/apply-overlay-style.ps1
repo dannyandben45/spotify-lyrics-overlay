@@ -60,22 +60,24 @@ public static class OverlayWin32 {
   public const int DWMNCRP_DISABLED = 1;
 
   public static void Apply(IntPtr hwnd, bool soft) {
-    long style;
-    if (IntPtr.Size == 8) {
-      style = GetWindowLongPtr64(hwnd, GWL_EXSTYLE).ToInt64();
-    } else {
-      style = GetWindowLong32(hwnd, GWL_EXSTYLE);
-    }
+    if (!soft) {
+      long style;
+      if (IntPtr.Size == 8) {
+        style = GetWindowLongPtr64(hwnd, GWL_EXSTYLE).ToInt64();
+      } else {
+        style = GetWindowLong32(hwnd, GWL_EXSTYLE);
+      }
 
-    style |= WS_EX_NOACTIVATE;
-    style |= WS_EX_TOOLWINDOW;
-    style |= WS_EX_LAYERED;
-    style &= ~((long)WS_EX_APPWINDOW);
+      style |= WS_EX_NOACTIVATE;
+      style |= WS_EX_TOOLWINDOW;
+      style |= WS_EX_LAYERED;
+      style &= ~((long)WS_EX_APPWINDOW);
 
-    if (IntPtr.Size == 8) {
-      SetWindowLongPtr64(hwnd, GWL_EXSTYLE, new IntPtr(style));
-    } else {
-      SetWindowLong32(hwnd, GWL_EXSTYLE, (int)style);
+      if (IntPtr.Size == 8) {
+        SetWindowLongPtr64(hwnd, GWL_EXSTYLE, new IntPtr(style));
+      } else {
+        SetWindowLong32(hwnd, GWL_EXSTYLE, (int)style);
+      }
     }
 
     try {
@@ -98,15 +100,15 @@ public static class OverlayWin32 {
       // Older Windows — ignore
     }
 
-    uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+    // Soft mode: DWM attributes only — SetWindowPos redraw flashes the caption bar
     if (!soft) {
-      flags |= SWP_FRAMECHANGED;
+      uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+      SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, flags);
     }
-
-    SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, flags);
   }
 }
 "@
+
 
 $hwnd = [IntPtr]::new([int64]$HwndValue)
 [OverlayWin32]::Apply($hwnd, [bool]$Soft)

@@ -16,6 +16,14 @@ export default defineConfig({
     electron({
       main: {
         entry: 'electron/main.ts',
+        vite: {
+          build: {
+            // Native addon — must not be bundled into the Electron main chunk
+            rollupOptions: {
+              external: ['koffi'],
+            },
+          },
+        },
       },
       preload: {
         input: 'electron/preload.ts',

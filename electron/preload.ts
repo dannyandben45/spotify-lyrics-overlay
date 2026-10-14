@@ -31,6 +31,19 @@ const api = {
   setClickThrough: (enabled: boolean) =>
     ipcRenderer.invoke('overlay:setClickThrough', enabled),
   lockOverlayFixedSize: () => ipcRenderer.invoke('overlay:lockFixedSize'),
+  setOverlayScale: (
+    scale: number,
+  ): Promise<{ ok: boolean; scale?: number }> =>
+    ipcRenderer.invoke('overlay:setScale', scale),
+  onOverlayScale: (callback: (scale: number) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, scale: number) => {
+      callback(scale)
+    }
+    ipcRenderer.on('overlay:scale', listener)
+    return () => {
+      ipcRenderer.removeListener('overlay:scale', listener)
+    }
+  },
   startOverlayDrag: (point: { screenX: number; screenY: number }) =>
     ipcRenderer.send('overlay:dragStart', point),
   moveOverlayDrag: (point: { screenX: number; screenY: number }) =>
