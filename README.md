@@ -1,10 +1,62 @@
 # Spotify Lyrics Overlay
 
-Always-on-top floating lyrics for Spotify on Windows.
+Always-on-top floating lyrics for **Spotify Desktop on Windows**.
+
+**Windows only.** macOS and Linux are not supported (the app uses the Windows media session API).
 
 **No Spotify Developer account. No OAuth. No Client ID.**
 
-The app reads whatever Spotify Desktop is playing through Windows media session, then loads lyrics from free sources.
+---
+
+## Download
+
+Get the latest portable `.exe` from GitHub Releases:
+
+**https://github.com/dannyandben45/spotify-lyrics-overlay/releases**
+
+1. Open the newest release (e.g. `v1.0.1`)
+2. Download **Spotify Lyrics Overlay x.x.x.exe**
+3. Double-click to run — no installer needed
+
+Windows may show SmartScreen on first run (unsigned app). Choose **More info → Run anyway**.
+
+---
+
+## How to use
+
+1. Start **Spotify Lyrics Overlay** (the `.exe`)
+2. Open **Spotify Desktop** and play a song  
+   (Desktop app works best; the web player is less reliable)
+3. Lyrics appear in a floating overlay on top of other windows
+4. The app stays in the **system tray** (green circle near the clock)
+
+### Tray menu
+
+| Action | What it does |
+| --- | --- |
+| **Show Control Panel** | Opens settings |
+| **Toggle Lyrics Overlay** | Show / hide the lyrics window |
+| **Quit** | Exit the app completely |
+
+Double-click the tray icon to open settings.
+
+### Settings (Control Panel)
+
+- Turn the overlay on or off
+- Adjust sync / display options
+- **Overlay size** — scale lyrics; use **Reset scale** to go back to default  
+  (You can also drag the small triangle at the top-left of the overlay to resize diagonally)
+- Close settings with **X** — the overlay keeps running; reopen from the tray
+
+### Tips
+
+- Closing the settings window does **not** quit the app — use **Quit** in the tray (or the quit control in settings)
+- Scale resets each time you reopen the app
+- Some tracks have no synced lyrics; the app will try several free sources
+
+---
+
+## Lyrics sources
 
 **粵語 / 港台 / 中文歌**
 1. [LRCLIB](https://lrclib.net) (synced, tries traditional + simplified)
@@ -15,25 +67,31 @@ The app reads whatever Spotify Desktop is playing through Windows media session,
 **其他歌**
 1. LRCLIB → LrcAPI → NetEase → lyrics.ovh
 
-## For anyone using it
+---
 
-1. Run the app
-2. Open **Spotify Desktop** and play a track
-3. Lyrics float on top of other windows
-4. Close the control panel — overlay stays (system tray)
-
-## Dev
+## Dev (contributors)
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Notes
+Build a portable Windows `.exe`:
 
-- Windows only (uses system media session)
-- Prefer Spotify Desktop over the web player
-- Some tracks have no synced lyrics on LRCLIB
+```bash
+npm run dist
+```
+
+Output: `release/Spotify Lyrics Overlay x.x.x.exe`
+
+---
+
+## Requirements
+
+- **Windows 10 / 11** (x64)
+- **Spotify Desktop** installed and playing
+
+---
 
 ## Attribution
 
