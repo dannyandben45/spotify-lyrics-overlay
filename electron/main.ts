@@ -80,12 +80,15 @@ const hideControlPanel = () => {
 
     controlSavedBounds = controlWindow.getBounds()
     const { width, height } = controlSavedBounds
+    // Leave taskbar so click-to-restore does not activate DWM caption paint
+    controlWindow.setSkipTaskbar(true)
     controlWindow.setOpacity(0)
     controlWindow.setIgnoreMouseEvents(true)
     controlWindow.setBounds({ x: -32000, y: -32000, width, height })
     controlParked = true
 
     await hardenOverlayChrome({ clickThrough: true, soft: true })
+    clearOverlayCaption()
     closingControl = false
   })()
 }
@@ -113,6 +116,7 @@ const showControlPanel = () => {
     controlWindow.setBounds(bounds)
     controlWindow.setOpacity(1)
     controlWindow.setIgnoreMouseEvents(false)
+    controlWindow.setSkipTaskbar(false)
     controlParked = false
 
     if (!controlWindow.isVisible()) {
@@ -120,6 +124,7 @@ const showControlPanel = () => {
     }
     controlWindow.focus()
     await hardenOverlayChrome({ clickThrough: true, soft: true })
+    clearOverlayCaption()
   })()
 }
 
@@ -166,6 +171,8 @@ const createControlWindow = () => {
     minWidth: 360,
     minHeight: 420,
     show: false,
+    // Hidden until opened from tray — avoids taskbar focus → overlay caption flash
+    skipTaskbar: true,
     title: 'Spotify Lyrics Overlay',
     backgroundColor: '#0f1410',
     webPreferences: {
@@ -284,9 +291,8 @@ const createOverlayWindow = () => {
     title: '',
     roundedCorners: false,
     // toolbar type reduces Win11 caption chrome on transparent windows
-    ...(process.platform === 'win32'
-      ? { type: 'toolbar' as const, backgroundMaterial: 'none' as const }
-      : {}),
+    // Do NOT set backgroundMaterial — it regresses caption paint on Electron 35.5+
+    ...(process.platform === 'win32' ? { type: 'toolbar' as const } : {}),
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
@@ -471,17 +477,32 @@ const startApp = () => {
   createControlWindow()
   createOverlayWindow()
 
-  app.on('browser-window-blur', () => {
-    if (closingControl || controlParked) return
+  // Win11 paints a fake caption on transparent overlays on any app focus change
+  const scrubCaption = () => {
     void hardenOverlayChrome({ clickThrough: true, soft: true })
     clearOverlayCaption()
+    setTimeout(clearOverlayCaption, 16)
+    setTimeout(clearOverlayCaption, 50)
+  }
+
+  app.on('browser-window-blur', () => {
+    if (closingControl) return
+    scrubCaption()
   })
 
   app.on('browser-window-focus', () => {
     if (closingControl) return
-    void hardenOverlayChrome({ clickThrough: true, soft: true })
-    clearOverlayCaption()
+    scrubCaption()
   })
+
+  // Power monitor / display sleep can also leave a stuck caption
+  if (process.platform === 'win32') {
+    setInterval(() => {
+      if (!overlayWindow || overlayWindow.isDestroyed()) return
+      if (!overlayWindow.isVisible()) return
+      applyOverlayWindowStyle(overlayWindow, { soft: true }).catch(() => {})
+    }, 2000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

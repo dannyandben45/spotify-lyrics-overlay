@@ -220,6 +220,7 @@ export const installOverlayNcHooks = (win: BrowserWindow) => {
 /**
  * 1px size nudge clears a phantom Win11 titlebar that can stick after focus changes.
  * Keeps final size identical so lyrics layout does not jump.
+ * Uses setResizable toggle — required when min===max size locks the window.
  */
 export const nudgeOverlayToClearCaption = (win: BrowserWindow) => {
   if (process.platform !== 'win32' || win.isDestroyed()) return
@@ -227,13 +228,15 @@ export const nudgeOverlayToClearCaption = (win: BrowserWindow) => {
   applyNativeSoft(win)
 
   const [w, h] = win.getSize()
-  const [x, y] = win.getPosition()
   try {
+    win.setResizable(true)
+    win.setMinimumSize(1, 1)
+    win.setMaximumSize(10000, 10000)
+    win.setSize(w, h + 1)
+    win.setSize(w, h)
     win.setMinimumSize(w, h)
-    win.setMaximumSize(w, h + 1)
-    win.setBounds({ x, y, width: w, height: h + 1 })
-    win.setBounds({ x, y, width: w, height: h })
     win.setMaximumSize(w, h)
+    win.setResizable(false)
   } catch {
     // ignore
   }

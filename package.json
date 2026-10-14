@@ -1,6 +1,6 @@
 {
   "name": "spotify-lyrics-overlay",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Always-on-top Spotify lyrics overlay for Windows",
   "main": "dist-electron/main.js",
   "type": "module",
@@ -24,7 +24,7 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^35.0.1",
+    "electron": "35.4.0",
     "electron-builder": "^26.15.3",
     "tailwindcss": "^4.0.14",
     "typescript": "^5.8.2",
