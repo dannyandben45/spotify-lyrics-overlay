@@ -34,6 +34,8 @@ export type PlaybackPayload = {
   progressMs: number
   durationMs: number
   lines: LyricLine[]
+  /** Which free lyrics provider supplied the lines, when known */
+  source: string | null
   status: 'idle' | 'loading' | 'ready' | 'empty' | 'error'
   message?: string
 }

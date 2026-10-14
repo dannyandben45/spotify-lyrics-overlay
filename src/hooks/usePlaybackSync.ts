@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchSyncedLyrics } from '../lib/lyrics'
-import type { LyricLine, PlaybackPayload } from '../lib/types'
+import { fetchSyncedLyrics, type SyncedLyricsResult } from '../lib/lyrics'
+import type { PlaybackPayload } from '../lib/types'
 
 const SEEK_THRESHOLD_MS = 2200
 const STALE_BEHIND_MS = 900
 const EMPTY_RETRY_MS = 20_000
 // Bump when lyric matching logic changes so stale wrong lyrics are refetched
-const LYRICS_CACHE_VERSION = 5
+const LYRICS_CACHE_VERSION = 7
 
 const idlePayload = (partial?: Partial<PlaybackPayload>): PlaybackPayload => ({
   connected: true,
@@ -17,6 +17,7 @@ const idlePayload = (partial?: Partial<PlaybackPayload>): PlaybackPayload => ({
   progressMs: 0,
   durationMs: 0,
   lines: [],
+  source: null,
   status: 'idle',
   ...partial,
 })
@@ -28,7 +29,7 @@ type Options = {
 
 export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
   const [playback, setPlayback] = useState<PlaybackPayload>(idlePayload())
-  const lyricsCache = useRef<Map<string, LyricLine[]>>(new Map())
+  const lyricsCache = useRef<Map<string, SyncedLyricsResult>>(new Map())
   const emptyRetryAt = useRef<Map<string, number>>(new Map())
   const fetchingTracks = useRef<Set<string>>(new Set())
   const anchorPositionRef = useRef(0)
@@ -124,9 +125,9 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
         result.positionMs + (result.isPlaying ? Math.max(0, latency) : 0)
       const progressMs = adoptPosition(sampled, trackChanged)
 
-      let lines = lyricsCache.current.get(cacheKey)
+      let cached = lyricsCache.current.get(cacheKey)
       const needsFetch =
-        !lines &&
+        !cached &&
         !fetchingTracks.current.has(cacheKey) &&
         Date.now() >= (emptyRetryAt.current.get(cacheKey) ?? 0)
 
@@ -141,23 +142,25 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
           progressMs,
           durationMs,
           lines: [],
+          source: null,
           status: 'loading',
           message: 'Fetching lyrics…',
         })
 
         try {
           const primaryArtist = artists.split(',')[0]?.trim() || artists
-          lines = await fetchSyncedLyrics({
+          const fetched = await fetchSyncedLyrics({
             title,
             artist: primaryArtist,
             album,
             durationSec: durationMs / 1000 || 180,
           })
-          if (lines.length > 0) {
-            lyricsCache.current.set(cacheKey, lines)
+          if (fetched.lines.length > 0) {
+            cached = fetched
+            lyricsCache.current.set(cacheKey, fetched)
             emptyRetryAt.current.delete(cacheKey)
           } else {
-            lines = []
+            cached = { lines: [], source: null }
             emptyRetryAt.current.set(cacheKey, Date.now() + EMPTY_RETRY_MS)
           }
         } catch {
@@ -172,6 +175,7 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
             progressMs: estimatedProgress(),
             durationMs,
             lines: [],
+            source: null,
             status: 'error',
             message: 'Could not load lyrics',
           })
@@ -181,7 +185,8 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
         }
       }
 
-      const resolvedLines = lines ?? []
+      const resolvedLines = cached?.lines ?? []
+      const resolvedSource = cached?.source ?? null
       if (resolvedLines.length > 0) {
         publish({
           connected: true,
@@ -192,6 +197,7 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
           progressMs: estimatedProgress(),
           durationMs,
           lines: resolvedLines,
+          source: resolvedSource,
           status: 'ready',
         })
         return
@@ -207,6 +213,7 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
           progressMs: estimatedProgress(),
           durationMs,
           lines: [],
+          source: null,
           status: 'loading',
           message: 'Fetching lyrics…',
         })
@@ -222,6 +229,7 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
         progressMs: estimatedProgress(),
         durationMs,
         lines: [],
+        source: null,
         status: 'empty',
         message: 'No lyrics',
       })

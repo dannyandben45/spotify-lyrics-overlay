@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { lyricsSourceAttribution } from '../lib/attribution'
 import { findActiveLineIndex } from '../lib/lyrics'
 import { usePlaybackSync } from '../hooks/usePlaybackSync'
 
@@ -34,6 +35,7 @@ export const ControlPanel = () => {
   }
 
   const activeIndex = findActiveLineIndex(playback.lines, playback.progressMs)
+  const sourceLabel = lyricsSourceAttribution(playback.source)
   const previewLine =
     playback.status === 'loading' || playback.status === 'idle'
       ? 'Loading…'
@@ -139,8 +141,49 @@ export const ControlPanel = () => {
           <p className="font-display text-2xl leading-snug italic">
             {previewLine}
           </p>
+          {sourceLabel ? (
+            <p className="mt-3 text-[11px] tracking-wide text-[var(--muted)]">
+              {sourceLabel}
+            </p>
+          ) : null}
         </div>
       </section>
+
+      <footer className="mt-6 space-y-1 text-[11px] leading-relaxed text-[var(--muted)]">
+        <p>
+          Not affiliated with, endorsed by, or sponsored by Spotify AB.
+        </p>
+        <p>
+          Lyrics courtesy of{' '}
+          <a
+            href="https://lrclib.net"
+            className="underline decoration-[var(--line)] underline-offset-2 transition hover:text-[var(--ink)]"
+            target="_blank"
+            rel="noreferrer"
+          >
+            LRCLIB
+          </a>
+          , NetEase Cloud Music,{' '}
+          <a
+            href="https://github.com/HisAtri/LrcApi"
+            className="underline decoration-[var(--line)] underline-offset-2 transition hover:text-[var(--ink)]"
+            target="_blank"
+            rel="noreferrer"
+          >
+            LrcAPI
+          </a>
+          , and{' '}
+          <a
+            href="https://lyrics.ovh"
+            className="underline decoration-[var(--line)] underline-offset-2 transition hover:text-[var(--ink)]"
+            target="_blank"
+            rel="noreferrer"
+          >
+            lyrics.ovh
+          </a>
+          . Rights belong to their respective owners.
+        </p>
+      </footer>
     </div>
   )
 }

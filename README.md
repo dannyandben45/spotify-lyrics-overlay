@@ -34,3 +34,21 @@ npm run dev
 - Windows only (uses system media session)
 - Prefer Spotify Desktop over the web player
 - Some tracks have no synced lyrics on LRCLIB
+
+## Attribution
+
+This project is **not affiliated with, endorsed by, or sponsored by Spotify AB**.
+“Spotify” is a trademark of Spotify AB.
+
+Lyrics are fetched on demand from free third-party sources. Song lyrics remain
+the property of their respective writers, publishers, and rights holders.
+This app does not claim ownership of any lyrics.
+
+| Source | Link |
+| --- | --- |
+| LRCLIB | https://lrclib.net |
+| NetEase Cloud Music | https://music.163.com |
+| LrcAPI | https://github.com/HisAtri/LrcApi |
+| lyrics.ovh | https://lyrics.ovh |
+
+Chinese traditional/simplified conversion uses [opencc-js](https://github.com/nk2028/opencc-js).

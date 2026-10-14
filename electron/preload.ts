@@ -39,6 +39,7 @@ const api = {
   minimizeControl: () => ipcRenderer.invoke('window:minimizeControl'),
   hideControl: () => ipcRenderer.invoke('window:hideControl'),
   showControl: () => ipcRenderer.invoke('window:showControl'),
+  quitApp: () => ipcRenderer.invoke('app:quit'),
   sendPlaybackUpdate: (payload: unknown) =>
     ipcRenderer.send('playback:update', payload),
   onPlaybackUpdate: (callback: (payload: unknown) => void) => {

@@ -1,5 +1,13 @@
 import * as OpenCC from 'opencc-js'
 
+/** LRCLIB requires clients to identify themselves via User-Agent */
+const APP_USER_AGENT =
+  'SpotifyLyricsOverlay/1.0 (https://github.com/dannyandben45/spotify-lyrics-overlay)'
+
+const lrclibHeaders = {
+  'User-Agent': APP_USER_AGENT,
+}
+
 export type LyricLine = {
   timeMs: number
   text: string
@@ -146,10 +154,42 @@ const plainToTimedLines = (plain: string, durationSec: number): LyricLine[] => {
 }
 
 type LrcLibTrack = {
+  id?: number
   duration?: number
   syncedLyrics?: string | null
   plainLyrics?: string | null
   instrumental?: boolean
+}
+
+/**
+ * Crowd-sourced LRCLIB sometimes returns evenly-spaced "guess" LRC
+ * (e.g. King Gnu AIZO tagged 238s but marked Approximate timing, vocals at 0:00).
+ * Those look synced but run ~10s early vs real masters.
+ */
+const isLowQualitySyncedLrc = (
+  syncedLyrics: string,
+  lines: LyricLine[],
+): boolean => {
+  if (/approximate\s+timing/i.test(syncedLyrics)) return true
+  if (lines.length < 6) return false
+
+  const first = lines[0]?.timeMs ?? 0
+  if (first > 1500) return false
+
+  const sample = lines.slice(0, Math.min(lines.length, 12))
+  const gaps: number[] = []
+  for (let i = 1; i < sample.length; i += 1) {
+    gaps.push(sample[i].timeMs - sample[i - 1].timeMs)
+  }
+  if (gaps.length < 5) return false
+
+  const average = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length
+  if (average < 1500 || average > 5000) return false
+
+  const variance =
+    gaps.reduce((sum, gap) => sum + (gap - average) ** 2, 0) / gaps.length
+  const stdDev = Math.sqrt(variance)
+  return stdDev < average * 0.18
 }
 
 const lrcLibTrackToResult = (
@@ -164,7 +204,9 @@ const lrcLibTrackToResult = (
 
   if (track.syncedLyrics) {
     const lines = parseLrc(track.syncedLyrics)
-    if (lines.length > 0) return { lines, sourceDurationMs }
+    if (lines.length === 0) return emptyResult()
+    if (isLowQualitySyncedLrc(track.syncedLyrics, lines)) return emptyResult()
+    return { lines, sourceDurationMs }
   }
   if (track.plainLyrics) {
     return {
@@ -175,9 +217,32 @@ const lrcLibTrackToResult = (
   return emptyResult()
 }
 
+const scoreLrcLibCandidate = (
+  track: LrcLibTrack,
+  durationSec: number,
+): number => {
+  const hasSynced = Boolean(track.syncedLyrics)
+  const base = hasSynced ? 0 : 10_000
+  if (typeof track.duration === 'number' && track.duration > 0) {
+    // Prefer real synced LRC; among those, closest duration wins
+    return base + Math.abs(track.duration - durationSec)
+  }
+  // Unknown duration: mild penalty so exact duration matches rank higher
+  return base + 3
+}
+
 const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> => {
   const durationSec = Math.round(query.durationSec || 0)
   const album = usefulAlbum(query.title, query.album)
+  const candidates = new Map<string, LrcLibTrack>()
+
+  const remember = (track: LrcLibTrack) => {
+    const key =
+      track.id != null
+        ? `id:${track.id}`
+        : `d:${track.duration ?? '?'}|${(track.syncedLyrics ?? track.plainLyrics ?? '').slice(0, 80)}`
+    if (!candidates.has(key)) candidates.set(key, track)
+  }
 
   // Exact + nearby durations: Spotify length often ≠ CN karaoke length
   const durationTries = uniqueStrings(
@@ -189,6 +254,8 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
       durationSec + 2,
       Math.round(durationSec * 0.95),
       Math.round(durationSec * 0.94),
+      Math.round(durationSec * 0.91),
+      Math.round(durationSec * 0.9),
     ]
       .filter((value) => value > 30)
       .map(String),
@@ -202,11 +269,9 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
     getUrl.searchParams.set('duration', String(duration))
 
     try {
-      const response = await fetch(getUrl.toString())
+      const response = await fetch(getUrl.toString(), { headers: lrclibHeaders })
       if (!response.ok) continue
-      const track = (await response.json()) as LrcLibTrack
-      const result = lrcLibTrackToResult(track, durationSec)
-      if (result.lines.length > 0) return result
+      remember((await response.json()) as LrcLibTrack)
     } catch {
       // try next
     }
@@ -218,29 +283,33 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
   if (album) search.searchParams.set('album_name', album)
 
   try {
-    const searchResponse = await fetch(search.toString())
-    if (!searchResponse.ok) return emptyResult()
-
-    const results = (await searchResponse.json()) as LrcLibTrack[]
-    if (!Array.isArray(results) || results.length === 0) return emptyResult()
-
-    const synced = results
-      .filter((item) => item.syncedLyrics)
-      .sort((a, b) => {
-        const da = Math.abs((a.duration ?? durationSec) - durationSec)
-        const db = Math.abs((b.duration ?? durationSec) - durationSec)
-        return da - db
-      })
-
-    if (synced[0]) {
-      const result = lrcLibTrackToResult(synced[0], durationSec)
-      if (result.lines.length > 0) return result
+    const searchResponse = await fetch(search.toString(), {
+      headers: lrclibHeaders,
+    })
+    if (searchResponse.ok) {
+      const results = (await searchResponse.json()) as LrcLibTrack[]
+      if (Array.isArray(results)) {
+        for (const track of results) remember(track)
+      }
     }
-
-    const plain = results.find((item) => item.plainLyrics)
-    if (plain) return lrcLibTrackToResult(plain, durationSec)
   } catch {
-    return emptyResult()
+    // keep get-only candidates
+  }
+
+  const ranked = [...candidates.values()].sort(
+    (a, b) => scoreLrcLibCandidate(a, durationSec) - scoreLrcLibCandidate(b, durationSec),
+  )
+
+  for (const track of ranked) {
+    if (!track.syncedLyrics) continue
+    const result = lrcLibTrackToResult(track, durationSec)
+    if (result.lines.length > 0) return result
+  }
+
+  for (const track of ranked) {
+    if (!track.plainLyrics) continue
+    const result = lrcLibTrackToResult(track, durationSec)
+    if (result.lines.length > 0) return result
   }
 
   return emptyResult()
@@ -458,7 +527,7 @@ const fetchFromLrcApi = async (query: LyricsQuery): Promise<LyricsFetchResult> =
   const albumVariants = album ? ['', album] : ['']
 
   const headers = {
-    'User-Agent': 'SpotifyLyricsOverlay/1.0 (personal; Windows)',
+    'User-Agent': APP_USER_AGENT,
   }
 
   for (const albumName of albumVariants) {

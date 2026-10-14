@@ -320,6 +320,12 @@ const registerIpc = () => {
     return { ok: true }
   })
 
+  ipcMain.handle('app:quit', () => {
+    isQuitting = true
+    app.quit()
+    return { ok: true }
+  })
+
   ipcMain.on('playback:update', (_event, payload) => {
     if (!overlayWindow) return
     overlayWindow.webContents.send('playback:update', payload)

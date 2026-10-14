@@ -1,11 +1,16 @@
 import type { LyricLine } from './types'
 
+export type SyncedLyricsResult = {
+  lines: LyricLine[]
+  source: string | null
+}
+
 export const fetchSyncedLyrics = async (params: {
   title: string
   artist: string
   album?: string
   durationSec: number
-}): Promise<LyricLine[]> => {
+}): Promise<SyncedLyricsResult> => {
   const result = await window.lyricsApi.fetchLyrics({
     title: params.title,
     artist: params.artist,
@@ -13,7 +18,10 @@ export const fetchSyncedLyrics = async (params: {
     durationSec: params.durationSec,
   })
 
-  return result.lines ?? []
+  return {
+    lines: result.lines ?? [],
+    source: result.source ?? null,
+  }
 }
 
 export const findActiveLineIndex = (
