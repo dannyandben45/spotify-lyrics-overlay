@@ -26,27 +26,40 @@ const resolveScriptPath = () => {
   return candidates[0]
 }
 
+export type OverlayStyleOptions = {
+  /**
+   * Soft re-apply skips SWP_FRAMECHANGED / DwmExtendFrame.
+   * Use for focus transitions so Windows does not flash the caption strip.
+   */
+  soft?: boolean
+}
+
 /**
  * Prevents Windows from painting the accent/title-bar strip on the overlay
  * when focus switches to another app (WS_EX_NOACTIVATE + TOOLWINDOW).
  */
-export const applyOverlayWindowStyle = async (win: BrowserWindow) => {
+export const applyOverlayWindowStyle = async (
+  win: BrowserWindow,
+  options: OverlayStyleOptions = {},
+) => {
   if (process.platform !== 'win32') return
 
+  const args = [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    resolveScriptPath(),
+    '-HwndValue',
+    readHwnd(win),
+  ]
+  if (options.soft) args.push('-Soft')
+
   try {
-    await execFileAsync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        resolveScriptPath(),
-        '-HwndValue',
-        readHwnd(win),
-      ],
-      { windowsHide: true, timeout: 4000 },
-    )
+    await execFileAsync('powershell.exe', args, {
+      windowsHide: true,
+      timeout: 4000,
+    })
   } catch {
     // Non-fatal — overlay still works without the style tweak
   }

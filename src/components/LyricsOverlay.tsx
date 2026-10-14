@@ -138,7 +138,11 @@ export const LyricsOverlay = () => {
           <button
             type="button"
             className="overlay-settings cursor-pointer rounded-lg p-1.5 text-white/80 transition hover:text-white"
-            onClick={() => window.lyricsApi.showControl()}
+            onClick={() => {
+              clickThroughRef.current = true
+              void window.lyricsApi.setClickThrough(true)
+              void window.lyricsApi.showControl()
+            }}
             aria-label="Open settings"
             tabIndex={0}
           >

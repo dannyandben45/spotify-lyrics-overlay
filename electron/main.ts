@@ -19,8 +19,81 @@ let controlWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+let closingControl = false
+let overlayStyleReady = false
+let hardenOverlayTimer: ReturnType<typeof setTimeout> | null = null
+let restoreOverlayOpacityTimer: ReturnType<typeof setTimeout> | null = null
 
 const isDev = !app.isPackaged
+
+type HardenOptions = {
+  clickThrough?: boolean
+  /** Soft = no SWP_FRAMECHANGED (avoids caption flash on focus changes) */
+  soft?: boolean
+  /** Hide overlay for one frame so a caption paint is not visible */
+  concealFlash?: boolean
+}
+
+/**
+ * Re-assert transparent / NOACTIVATE chrome.
+ * Soft re-applies are used after focus changes so Windows does not flash
+ * the caption strip via SWP_FRAMECHANGED.
+ */
+const hardenOverlayChrome = (opts: HardenOptions = {}) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+
+  const soft = opts.soft ?? overlayStyleReady
+  const concealFlash = Boolean(opts.concealFlash)
+
+  const applyOnce = async () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return
+    overlayWindow.setBackgroundColor('#00000000')
+    overlayWindow.setFocusable(false)
+    if (opts.clickThrough !== undefined) {
+      overlayWindow.setIgnoreMouseEvents(opts.clickThrough, { forward: true })
+    }
+    await applyOverlayWindowStyle(overlayWindow, { soft })
+    if (!soft) overlayStyleReady = true
+  }
+
+  if (hardenOverlayTimer) clearTimeout(hardenOverlayTimer)
+  if (restoreOverlayOpacityTimer) clearTimeout(restoreOverlayOpacityTimer)
+
+  if (concealFlash) {
+    // Hide for the focus transition so the caption paint is never visible
+    overlayWindow.setOpacity(0)
+    void (async () => {
+      await applyOnce()
+      await new Promise((resolve) => {
+        hardenOverlayTimer = setTimeout(() => {
+          hardenOverlayTimer = null
+          resolve(undefined)
+        }, 80)
+      })
+      await applyOnce()
+      if (!overlayWindow || overlayWindow.isDestroyed()) return
+      overlayWindow.setOpacity(1)
+    })()
+    return
+  }
+
+  void applyOnce()
+  hardenOverlayTimer = setTimeout(() => {
+    hardenOverlayTimer = null
+    void applyOnce()
+  }, 100)
+}
+
+const hideControlPanel = () => {
+  if (!controlWindow || controlWindow.isDestroyed()) return
+  closingControl = true
+  // Conceal before focus leaves settings — otherwise the caption strip flashes once
+  hardenOverlayChrome({ clickThrough: true, soft: true, concealFlash: true })
+  controlWindow.hide()
+  setTimeout(() => {
+    closingControl = false
+  }, 250)
+}
 
 // Keep GPU on — disabling hardware acceleration makes "transparent" areas
 // show a noticeable tint on Windows.
@@ -86,7 +159,16 @@ const createControlWindow = () => {
   controlWindow.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
-    controlWindow?.hide()
+    hideControlPanel()
+  })
+
+  // Soft harden only — full FRAMECHANGED re-apply flashes the caption bar
+  controlWindow.on('show', () => {
+    hardenOverlayChrome({ clickThrough: true, soft: true })
+  })
+  controlWindow.on('blur', () => {
+    if (closingControl) return
+    hardenOverlayChrome({ clickThrough: true, soft: true })
   })
 }
 
@@ -143,14 +225,6 @@ const createOverlayWindow = () => {
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setFocusable(false)
 
-  const hardenOverlayChrome = async () => {
-    if (!overlayWindow) return
-    overlayWindow.setBackgroundColor('#00000000')
-    overlayWindow.setFocusable(false)
-    overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-    await applyOverlayWindowStyle(overlayWindow)
-  }
-
   if (isDev) {
     overlayWindow.loadURL(getRendererUrl('overlay'))
   } else {
@@ -160,24 +234,24 @@ const createOverlayWindow = () => {
   }
 
   overlayWindow.once('ready-to-show', () => {
-    void (async () => {
-      if (!overlayWindow) return
-      await hardenOverlayChrome()
-      overlayWindow.showInactive()
-      await hardenOverlayChrome()
-    })()
+    if (!overlayWindow) return
+    overlayStyleReady = false
+    hardenOverlayChrome({ clickThrough: true, soft: false })
+    overlayWindow.showInactive()
+    hardenOverlayChrome({ clickThrough: true, soft: true })
   })
 
-  // Re-apply after focus changes — this is when Windows paints the blue strip
+  // Soft re-apply after focus changes — avoid FRAMECHANGED caption flash
   overlayWindow.on('blur', () => {
-    void hardenOverlayChrome()
+    hardenOverlayChrome({ clickThrough: true, soft: true })
   })
   overlayWindow.on('show', () => {
-    void hardenOverlayChrome()
+    hardenOverlayChrome({ clickThrough: true, soft: true })
   })
 
   overlayWindow.on('closed', () => {
     overlayWindow = null
+    overlayStyleReady = false
   })
 }
 
@@ -247,14 +321,8 @@ const registerIpc = () => {
 
   ipcMain.handle('overlay:setClickThrough', async (_event, enabled: boolean) => {
     if (!overlayWindow) return { ok: false }
-    overlayWindow.setIgnoreMouseEvents(enabled, { forward: true })
-    // Capturing mouse can make Windows paint a wide accent/caption strip —
-    // re-assert transparent + NOACTIVATE chrome every time.
-    overlayWindow.setBackgroundColor('#00000000')
-    overlayWindow.setFocusable(false)
-    if (!enabled) {
-      await applyOverlayWindowStyle(overlayWindow)
-    }
+    // Soft only — full FRAMECHANGED here flashes the header on every hover
+    hardenOverlayChrome({ clickThrough: enabled, soft: true })
     return { ok: true }
   })
 
@@ -299,10 +367,7 @@ const registerIpc = () => {
 
   ipcMain.on('overlay:dragEnd', () => {
     dragOffset = null
-    if (!overlayWindow) return
-    overlayWindow.setBackgroundColor('#00000000')
-    overlayWindow.setFocusable(false)
-    void applyOverlayWindowStyle(overlayWindow)
+    hardenOverlayChrome({ clickThrough: true, soft: true })
   })
 
   ipcMain.handle('window:minimizeControl', () => {
@@ -310,13 +375,17 @@ const registerIpc = () => {
   })
 
   ipcMain.handle('window:hideControl', () => {
-    controlWindow?.hide()
+    hideControlPanel()
+    return { ok: true }
   })
 
   ipcMain.handle('window:showControl', () => {
     if (!controlWindow) createControlWindow()
+    // Opening settings leaves overlay interactive briefly — force click-through
+    hardenOverlayChrome({ clickThrough: true, soft: true })
     controlWindow?.show()
     controlWindow?.focus()
+    hardenOverlayChrome({ clickThrough: true, soft: true })
     return { ok: true }
   })
 
@@ -338,6 +407,12 @@ const startApp = () => {
   createTray()
   createControlWindow()
   createOverlayWindow()
+
+  // Focus moving to another app — soft harden (no FRAMECHANGED flash)
+  app.on('browser-window-blur', () => {
+    if (closingControl) return
+    hardenOverlayChrome({ clickThrough: true, soft: true })
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

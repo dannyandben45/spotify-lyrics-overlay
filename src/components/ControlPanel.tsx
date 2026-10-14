@@ -1,34 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { lyricsSourceAttribution } from '../lib/attribution'
 import { findActiveLineIndex } from '../lib/lyrics'
 import { usePlaybackSync } from '../hooks/usePlaybackSync'
 
-const OFFSET_KEY = 'lyrics-sync-offset-ms'
-
 export const ControlPanel = () => {
-  const [overlayVisible, setOverlayVisible] = useState(true)
-  const [clickThrough, setClickThrough] = useState(false)
-  const [offsetMs, setOffsetMs] = useState(() => {
-    const saved = Number(localStorage.getItem(OFFSET_KEY) ?? '0')
-    return Number.isFinite(saved) ? saved : 0
-  })
+  const [offsetMs, setOffsetMs] = useState(0)
+  const lastTrackIdRef = useRef<string | null>(null)
   const playback = usePlaybackSync({ enabled: true, offsetMs })
 
+  // Reset nudge when the track changes; keep it when the same song is replayed
   useEffect(() => {
-    localStorage.setItem(OFFSET_KEY, String(offsetMs))
-  }, [offsetMs])
-
-  const handleToggleOverlay = async () => {
-    const next = !overlayVisible
-    setOverlayVisible(next)
-    await window.lyricsApi.setOverlayVisible(next)
-  }
-
-  const handleToggleClickThrough = async () => {
-    const next = !clickThrough
-    setClickThrough(next)
-    await window.lyricsApi.setClickThrough(next)
-  }
+    const trackId = playback.trackId
+    if (!trackId) return
+    if (
+      lastTrackIdRef.current !== null &&
+      lastTrackIdRef.current !== trackId
+    ) {
+      setOffsetMs(0)
+    }
+    lastTrackIdRef.current = trackId
+  }, [playback.trackId])
 
   const handleNudge = (delta: number) => {
     setOffsetMs((value) => Math.max(-15000, Math.min(15000, value + delta)))
@@ -61,36 +52,6 @@ export const ControlPanel = () => {
           float on top.
         </p>
       </header>
-
-      <section className="mb-5 rounded-2xl border border-[var(--line)] bg-[rgba(26,34,28,0.72)] p-4 backdrop-blur">
-        <h2 className="mb-3 text-sm font-semibold">Overlay</h2>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleToggleOverlay}
-            className="rounded-xl border border-[var(--line)] px-4 py-2.5 text-sm font-semibold transition hover:bg-white/5"
-            aria-label="Toggle lyrics overlay"
-          >
-            {overlayVisible ? 'Hide overlay' : 'Show overlay'}
-          </button>
-          <button
-            type="button"
-            onClick={handleToggleClickThrough}
-            className="rounded-xl border border-[var(--line)] px-4 py-2.5 text-sm font-semibold transition hover:bg-white/5"
-            aria-label="Toggle click through"
-          >
-            {clickThrough ? 'Disable click-through' : 'Enable click-through'}
-          </button>
-          <button
-            type="button"
-            onClick={() => window.lyricsApi.hideControl()}
-            className="rounded-xl border border-[var(--line)] px-4 py-2.5 text-sm font-semibold text-[var(--muted)] transition hover:bg-white/5"
-            aria-label="Hide to tray"
-          >
-            Hide to tray
-          </button>
-        </div>
-      </section>
 
       <section className="mb-5 rounded-2xl border border-[var(--line)] bg-[rgba(26,34,28,0.72)] p-4 backdrop-blur">
         <h2 className="mb-2 text-sm font-semibold">Sync timing</h2>
