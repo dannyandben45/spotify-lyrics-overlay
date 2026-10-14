@@ -8,6 +8,22 @@ const lrclibHeaders = {
   'User-Agent': APP_USER_AGENT,
 }
 
+const FETCH_TIMEOUT_MS = 8000
+
+const fetchWithTimeout = async (
+  input: string | URL,
+  init: RequestInit = {},
+  timeoutMs = FETCH_TIMEOUT_MS,
+) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export type LyricLine = {
   timeMs: number
   text: string
@@ -269,7 +285,9 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
     getUrl.searchParams.set('duration', String(duration))
 
     try {
-      const response = await fetch(getUrl.toString(), { headers: lrclibHeaders })
+      const response = await fetchWithTimeout(getUrl.toString(), {
+        headers: lrclibHeaders,
+      })
       if (!response.ok) continue
       remember((await response.json()) as LrcLibTrack)
     } catch {
@@ -283,7 +301,7 @@ const fetchFromLrcLib = async (query: LyricsQuery): Promise<LyricsFetchResult> =
   if (album) search.searchParams.set('album_name', album)
 
   try {
-    const searchResponse = await fetch(search.toString(), {
+    const searchResponse = await fetchWithTimeout(search.toString(), {
       headers: lrclibHeaders,
     })
     if (searchResponse.ok) {
@@ -333,19 +351,22 @@ type NeteaseSong = {
 const searchNeteaseSongs = async (keyword: string): Promise<NeteaseSong[]> => {
   // cloudsearch works better outside CN than /api/search/get/web
   try {
-    const response = await fetch('https://music.163.com/api/cloudsearch/pc', {
-      method: 'POST',
-      headers: {
-        ...neteaseHeaders,
-        'Content-Type': 'application/x-www-form-urlencoded',
+    const response = await fetchWithTimeout(
+      'https://music.163.com/api/cloudsearch/pc',
+      {
+        method: 'POST',
+        headers: {
+          ...neteaseHeaders,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          s: keyword,
+          type: '1',
+          offset: '0',
+          limit: '8',
+        }),
       },
-      body: new URLSearchParams({
-        s: keyword,
-        type: '1',
-        offset: '0',
-        limit: '8',
-      }),
-    })
+    )
     if (response.ok) {
       const searchJson = (await response.json()) as {
         result?: { songs?: NeteaseSong[] }
@@ -363,7 +384,7 @@ const searchNeteaseSongs = async (keyword: string): Promise<NeteaseSong[]> => {
   searchUrl.searchParams.set('offset', '0')
   searchUrl.searchParams.set('limit', '8')
 
-  const searchResponse = await fetch(searchUrl.toString(), {
+  const searchResponse = await fetchWithTimeout(searchUrl.toString(), {
     headers: neteaseHeaders,
   })
   if (!searchResponse.ok) return []
@@ -452,7 +473,7 @@ const fetchFromNetease = async (query: LyricsQuery): Promise<LyricsFetchResult> 
     lyricUrl.searchParams.set('kv', '1')
     lyricUrl.searchParams.set('tv', '-1')
 
-    const lyricResponse = await fetch(lyricUrl.toString(), {
+    const lyricResponse = await fetchWithTimeout(lyricUrl.toString(), {
       headers: neteaseHeaders,
     })
     if (!lyricResponse.ok) continue
@@ -481,7 +502,7 @@ const fetchFromLyricsOvh = async (query: LyricsQuery): Promise<LyricsFetchResult
   const title = encodeURIComponent(query.title)
   const url = `https://api.lyrics.ovh/v1/${artist}/${title}`
 
-  const response = await fetch(url)
+  const response = await fetchWithTimeout(url)
   if (!response.ok) return emptyResult()
 
   const json = (await response.json()) as { lyrics?: string }
@@ -539,7 +560,7 @@ const fetchFromLrcApi = async (query: LyricsQuery): Promise<LyricsFetchResult> =
         if (albumName) url.searchParams.set('album', albumName)
 
         try {
-          const response = await fetch(url.toString(), { headers })
+          const response = await fetchWithTimeout(url.toString(), { headers })
           if (!response.ok) continue
 
           const text = (await response.text()).trim()

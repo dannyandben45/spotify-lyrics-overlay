@@ -64,6 +64,14 @@ export const LyricWheel = ({
   const slideRef = useRef(0)
   const queueRef = useRef<number | null>(null)
   const baseIndexRef = useRef(baseIndex)
+  const settleTimerRef = useRef<number | undefined>(undefined)
+  const settleToRef = useRef<(nextBase: number) => void>(() => {})
+
+  const clearSettleTimer = () => {
+    if (settleTimerRef.current === undefined) return
+    window.clearTimeout(settleTimerRef.current)
+    settleTimerRef.current = undefined
+  }
 
   useEffect(() => {
     baseIndexRef.current = baseIndex
@@ -74,7 +82,12 @@ export const LyricWheel = ({
   }, [slide])
 
   useEffect(() => {
+    return () => clearSettleTimer()
+  }, [])
+
+  useEffect(() => {
     if (lines.length === 0) {
+      clearSettleTimer()
       rollingRef.current = false
       queueRef.current = null
       setRolling(false)
@@ -94,6 +107,12 @@ export const LyricWheel = ({
         window.requestAnimationFrame(() => {
           if (!rollingRef.current) return
           setSlide(1)
+          clearSettleTimer()
+          // If transitionend never fires (transparent overlay), force settle
+          settleTimerRef.current = window.setTimeout(() => {
+            if (!rollingRef.current || slideRef.current !== 1) return
+            settleToRef.current(baseIndexRef.current + 1)
+          }, ROLL_MS + 80)
         })
       })
     }
@@ -104,6 +123,7 @@ export const LyricWheel = ({
 
       // Seek / jump / first lyric: snap without roll
       if (target !== current + 1 || current < 0 || target < 0) {
+        clearSettleTimer()
         rollingRef.current = false
         queueRef.current = null
         setFreezeMotion(true)
@@ -127,6 +147,7 @@ export const LyricWheel = ({
   }, [activeIndex, lines.length])
 
   const settleTo = (nextBase: number) => {
+    clearSettleTimer()
     setFreezeMotion(true)
     setRolling(false)
     setSlide(0)
@@ -149,6 +170,11 @@ export const LyricWheel = ({
             window.requestAnimationFrame(() => {
               if (!rollingRef.current) return
               setSlide(1)
+              clearSettleTimer()
+              settleTimerRef.current = window.setTimeout(() => {
+                if (!rollingRef.current || slideRef.current !== 1) return
+                settleToRef.current(baseIndexRef.current + 1)
+              }, ROLL_MS + 80)
             })
           })
           return
@@ -161,6 +187,8 @@ export const LyricWheel = ({
       })
     })
   }
+
+  settleToRef.current = settleTo
 
   const handleTransitionEnd = (event: ReactTransitionEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return
