@@ -48,10 +48,15 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
     let cancelled = false
     let pollTimer: number | undefined
     let tickTimer: number | undefined
+    let pollInFlight = false
+    // Keep advancing briefly if SMTC flickers isPlaying=false
+    let playingGraceUntil = 0
 
     const estimatedProgress = () => {
       const base = anchorPositionRef.current
-      if (!isPlayingRef.current) return base
+      const treatPlaying =
+        isPlayingRef.current || Date.now() < playingGraceUntil
+      if (!treatPlaying) return base
       return base + (Date.now() - anchorAtRef.current)
     }
 
@@ -84,88 +89,186 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
       return current
     }
 
-    const poll = async () => {
-      const startedAt = Date.now()
-      const result = await window.lyricsApi.getNowPlaying()
-      const latency = Math.floor((Date.now() - startedAt) / 2)
-
-      if (!result.ok) {
-        publish(
-          idlePayload({
-            status: 'error',
-            message: result.error,
-          }),
-        )
-        return
-      }
-
-      if (!result.playing) {
-        trackIdRef.current = null
-        isPlayingRef.current = false
-        publish(
-          idlePayload({
-            status: 'idle',
-          }),
-        )
-        return
-      }
-
-      const trackId = result.trackKey
-      const cacheKey = `${trackId}::v${LYRICS_CACHE_VERSION}`
-      const title = result.title
-      const artists = result.artist
-      const album = result.album
-      const durationMs = result.durationMs
-      const trackChanged = trackIdRef.current !== trackId
-      trackIdRef.current = trackId
-      isPlayingRef.current = result.isPlaying
-
-      // Compensate half of PowerShell round-trip while playing
-      const sampled =
-        result.positionMs + (result.isPlaying ? Math.max(0, latency) : 0)
-      const progressMs = adoptPosition(sampled, trackChanged)
-
-      let cached = lyricsCache.current.get(cacheKey)
-      const needsFetch =
-        !cached &&
-        !fetchingTracks.current.has(cacheKey) &&
-        Date.now() >= (emptyRetryAt.current.get(cacheKey) ?? 0)
-
-      if (needsFetch) {
-        fetchingTracks.current.add(cacheKey)
+    const loadLyrics = async (
+      cacheKey: string,
+      meta: {
+        trackId: string
+        title: string
+        artists: string
+        album: string
+        durationMs: number
+        isPlaying: boolean
+      },
+    ) => {
+      try {
+        const primaryArtist =
+          meta.artists.split(',')[0]?.trim() || meta.artists
+        const fetched = await fetchSyncedLyrics({
+          title: meta.title,
+          artist: primaryArtist,
+          album: meta.album,
+          durationSec: meta.durationMs / 1000 || 180,
+        })
+        if (cancelled) return
+        if (fetched.lines.length > 0) {
+          lyricsCache.current.set(cacheKey, fetched)
+          emptyRetryAt.current.delete(cacheKey)
+          if (trackIdRef.current === meta.trackId) {
+            publish({
+              connected: true,
+              trackId: meta.trackId,
+              title: meta.title,
+              artists: meta.artists,
+              isPlaying: isPlayingRef.current,
+              progressMs: estimatedProgress(),
+              durationMs: meta.durationMs,
+              lines: fetched.lines,
+              source: fetched.source,
+              status: 'ready',
+            })
+          }
+        } else {
+          lyricsCache.current.set(cacheKey, { lines: [], source: null })
+          emptyRetryAt.current.set(cacheKey, Date.now() + EMPTY_RETRY_MS)
+          if (trackIdRef.current === meta.trackId) {
+            publish({
+              connected: true,
+              trackId: meta.trackId,
+              title: meta.title,
+              artists: meta.artists,
+              isPlaying: isPlayingRef.current,
+              progressMs: estimatedProgress(),
+              durationMs: meta.durationMs,
+              lines: [],
+              source: null,
+              status: 'empty',
+              message: 'No lyrics',
+            })
+          }
+        }
+      } catch {
+        if (cancelled) return
+        emptyRetryAt.current.set(cacheKey, Date.now() + EMPTY_RETRY_MS)
         publish({
           connected: true,
-          trackId,
-          title,
-          artists,
-          isPlaying: result.isPlaying,
-          progressMs,
-          durationMs,
+          trackId: meta.trackId,
+          title: meta.title,
+          artists: meta.artists,
+          isPlaying: meta.isPlaying,
+          progressMs: estimatedProgress(),
+          durationMs: meta.durationMs,
           lines: [],
           source: null,
-          status: 'loading',
-          message: 'Fetching lyrics…',
+          status: 'error',
+          message: 'Could not load lyrics',
         })
+      } finally {
+        fetchingTracks.current.delete(cacheKey)
+      }
+    }
 
-        try {
-          const primaryArtist = artists.split(',')[0]?.trim() || artists
-          const fetched = await fetchSyncedLyrics({
+    const poll = async () => {
+      if (pollInFlight || cancelled) return
+      pollInFlight = true
+      try {
+        const startedAt = Date.now()
+        const result = await window.lyricsApi.getNowPlaying()
+        if (cancelled) return
+        const latency = Math.floor((Date.now() - startedAt) / 2)
+
+        if (!result.ok) {
+          // Soft-fail: keep last track moving so a blip does not freeze lyrics
+          if (trackIdRef.current) return
+          publish(
+            idlePayload({
+              status: 'error',
+              message: result.error,
+            }),
+          )
+          return
+        }
+
+        if (!result.playing) {
+          trackIdRef.current = null
+          isPlayingRef.current = false
+          publish(
+            idlePayload({
+              status: 'idle',
+            }),
+          )
+          return
+        }
+
+        const trackId = result.trackKey
+        const cacheKey = `${trackId}::v${LYRICS_CACHE_VERSION}`
+        const title = result.title
+        const artists = result.artist
+        const album = result.album
+        const durationMs = result.durationMs
+        const trackChanged = trackIdRef.current !== trackId
+        trackIdRef.current = trackId
+        isPlayingRef.current = result.isPlaying
+        if (result.isPlaying) {
+          playingGraceUntil = Date.now() + 2500
+        }
+
+        // Compensate half of media-sample latency while playing
+        const sampled =
+          result.positionMs + (result.isPlaying ? Math.max(0, latency) : 0)
+        const progressMs = adoptPosition(sampled, trackChanged)
+
+        let cached = lyricsCache.current.get(cacheKey)
+        const needsFetch =
+          !cached &&
+          !fetchingTracks.current.has(cacheKey) &&
+          Date.now() >= (emptyRetryAt.current.get(cacheKey) ?? 0)
+
+        if (needsFetch) {
+          fetchingTracks.current.add(cacheKey)
+          publish({
+            connected: true,
+            trackId,
             title,
-            artist: primaryArtist,
-            album,
-            durationSec: durationMs / 1000 || 180,
+            artists,
+            isPlaying: result.isPlaying,
+            progressMs,
+            durationMs,
+            lines: [],
+            source: null,
+            status: 'loading',
+            message: 'Fetching lyrics…',
           })
-          if (fetched.lines.length > 0) {
-            cached = fetched
-            lyricsCache.current.set(cacheKey, fetched)
-            emptyRetryAt.current.delete(cacheKey)
-          } else {
-            cached = { lines: [], source: null }
-            emptyRetryAt.current.set(cacheKey, Date.now() + EMPTY_RETRY_MS)
-          }
-        } catch {
-          fetchingTracks.current.delete(cacheKey)
-          emptyRetryAt.current.set(cacheKey, Date.now() + EMPTY_RETRY_MS)
+          // Do not await — keeps poll + tick alive while providers respond
+          void loadLyrics(cacheKey, {
+            trackId,
+            title,
+            artists,
+            album,
+            durationMs,
+            isPlaying: result.isPlaying,
+          })
+        }
+
+        cached = lyricsCache.current.get(cacheKey)
+        const resolvedLines = cached?.lines ?? []
+        const resolvedSource = cached?.source ?? null
+        if (resolvedLines.length > 0) {
+          publish({
+            connected: true,
+            trackId,
+            title,
+            artists,
+            isPlaying: result.isPlaying,
+            progressMs: estimatedProgress(),
+            durationMs,
+            lines: resolvedLines,
+            source: resolvedSource,
+            status: 'ready',
+          })
+          return
+        }
+
+        if (fetchingTracks.current.has(cacheKey)) {
           publish({
             connected: true,
             trackId,
@@ -176,34 +279,12 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
             durationMs,
             lines: [],
             source: null,
-            status: 'error',
-            message: 'Could not load lyrics',
+            status: 'loading',
+            message: 'Fetching lyrics…',
           })
           return
-        } finally {
-          fetchingTracks.current.delete(cacheKey)
         }
-      }
 
-      const resolvedLines = cached?.lines ?? []
-      const resolvedSource = cached?.source ?? null
-      if (resolvedLines.length > 0) {
-        publish({
-          connected: true,
-          trackId,
-          title,
-          artists,
-          isPlaying: result.isPlaying,
-          progressMs: estimatedProgress(),
-          durationMs,
-          lines: resolvedLines,
-          source: resolvedSource,
-          status: 'ready',
-        })
-        return
-      }
-
-      if (fetchingTracks.current.has(cacheKey)) {
         publish({
           connected: true,
           trackId,
@@ -214,25 +295,12 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
           durationMs,
           lines: [],
           source: null,
-          status: 'loading',
-          message: 'Fetching lyrics…',
+          status: 'empty',
+          message: 'No lyrics',
         })
-        return
+      } finally {
+        pollInFlight = false
       }
-
-      publish({
-        connected: true,
-        trackId,
-        title,
-        artists,
-        isPlaying: result.isPlaying,
-        progressMs: estimatedProgress(),
-        durationMs,
-        lines: [],
-        source: null,
-        status: 'empty',
-        message: 'No lyrics',
-      })
     }
 
     const tick = () => {
@@ -259,7 +327,8 @@ export const usePlaybackSync = ({ enabled, offsetMs = 0 }: Options) => {
     void poll()
     pollTimer = window.setInterval(() => {
       void poll()
-    }, 1000)
+    }, 800)
+    // rAF-friendly interval — survives better than heavy work on the poll path
     tickTimer = window.setInterval(tick, 100)
 
     return () => {

@@ -10,7 +10,7 @@ import {
 } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getNowPlaying } from './mediaSession'
+import { getNowPlaying, stopMediaSessionWorker } from './mediaSession'
 import {
   applyOverlayWindowStyle,
   installOverlayNcHooks,
@@ -179,8 +179,12 @@ const createControlWindow = () => {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
+      // Lyric sync timers live in this window — never throttle when parked/backgrounded
+      backgroundThrottling: false,
     },
   })
+
+  controlWindow.webContents.setBackgroundThrottling(false)
 
   if (isDev) {
     controlWindow.loadURL(getRendererUrl('control'))
@@ -524,6 +528,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  stopMediaSessionWorker()
 })
 
 app.on('window-all-closed', () => {

@@ -1,6 +1,6 @@
 {
   "name": "spotify-lyrics-overlay",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Always-on-top Spotify lyrics overlay for Windows",
   "main": "dist-electron/main.js",
   "type": "module",
