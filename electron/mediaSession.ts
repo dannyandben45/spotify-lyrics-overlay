@@ -25,14 +25,17 @@ export type NowPlaying =
   | { ok: false; error: string }
 
 const resolveScriptPath = () => {
+  const resourcesPath =
+    typeof process.resourcesPath === 'string' ? process.resourcesPath : ''
   const candidates = [
     path.join(process.cwd(), 'electron', 'get-now-playing.ps1'),
     path.join(__dirname, '../electron/get-now-playing.ps1'),
     path.join(__dirname, 'get-now-playing.ps1'),
+    path.join(resourcesPath, 'electron', 'get-now-playing.ps1'),
   ]
 
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate
+    if (candidate && fs.existsSync(candidate)) return candidate
   }
 
   return candidates[0]

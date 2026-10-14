@@ -204,7 +204,7 @@ export const installOverlayNcHooks = (win: BrowserWindow) => {
       return true
     })
 
-    win.hookWindowMessage(WM_NCACTIVATE, (wParam, lParam) => {
+    win.hookWindowMessage(WM_NCACTIVATE, (wParam, _lParam) => {
       applyNativeSoft(win)
       if (api) {
         // -1 => DefWindowProc must not repaint the non-client area
@@ -244,13 +244,16 @@ export const nudgeOverlayToClearCaption = (win: BrowserWindow) => {
 }
 
 const resolveScriptPath = () => {
+  const resourcesPath =
+    typeof process.resourcesPath === 'string' ? process.resourcesPath : ''
   const candidates = [
     path.join(process.cwd(), 'electron', 'apply-overlay-style.ps1'),
     path.join(__dirname, '../electron/apply-overlay-style.ps1'),
     path.join(__dirname, 'apply-overlay-style.ps1'),
+    path.join(resourcesPath, 'electron', 'apply-overlay-style.ps1'),
   ]
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate
+    if (candidate && fs.existsSync(candidate)) return candidate
   }
   return candidates[0]
 }

@@ -4,9 +4,11 @@
   "description": "Always-on-top Spotify lyrics overlay for Windows",
   "main": "dist-electron/main.js",
   "type": "module",
+  "author": "dannyandben45",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.json --noEmit && vite build",
+    "dist": "npm run build && electron-builder --win",
     "preview": "vite preview",
     "start": "electron ."
   },
@@ -23,10 +25,44 @@
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^35.0.1",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "^4.0.14",
     "typescript": "^5.8.2",
     "vite": "^6.2.2",
     "vite-plugin-electron": "^0.29.0",
     "vite-plugin-electron-renderer": "^0.14.6"
+  },
+  "build": {
+    "appId": "com.dannyandben.spotify-lyrics-overlay",
+    "productName": "Spotify Lyrics Overlay",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "electron",
+        "to": "electron",
+        "filter": [
+          "*.ps1"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/koffi/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }
